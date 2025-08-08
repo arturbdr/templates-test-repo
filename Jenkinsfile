@@ -14,30 +14,32 @@ on_change to: production, {
  * Main entrypoint for the template registration pipeline.
  */
 void register_templates(app_env) {
-  stage("Register Templates - ${app_env.short_name}") {
-    script {
-      println "=== Template Registration for ${app_env.short_name.toUpperCase()} ==="
-      println "Document Service URL: ${app_env.document_service_url}"
-      
-      // Get git diff to find new template files (last commit only)
-      def gitDiffOutput = getNewTemplateFilesFromGit()
-      if (!gitDiffOutput) {
-        printNoTemplatesFoundMessage()
-        return
+  node {
+    stage("Register Templates - ${app_env.short_name}") {
+      script {
+        println "=== Template Registration for ${app_env.short_name.toUpperCase()} ==="
+        println "Document Service URL: ${app_env.document_service_url}"
+
+        // Get git diff to find new template files (last commit only)
+        def gitDiffOutput = getNewTemplateFilesFromGit()
+        if (!gitDiffOutput) {
+          printNoTemplatesFoundMessage()
+          return
+        }
+
+        printNewTemplateFiles(gitDiffOutput)
+        def templatesToRegister = extractTemplatesFromGitDiff(gitDiffOutput)
+        if (templatesToRegister.isEmpty()) {
+          println "No templates to register after parsing."
+          return
+        }
+
+        printTemplatesToRegister(templatesToRegister)
+        def gitMeta = getGitMetadata()
+        printGitMetadata(gitMeta)
+        registerTemplates(templatesToRegister, gitMeta, app_env)
+        println "=== Template Registration for ${app_env.short_name.toUpperCase()} Completed ==="
       }
-      
-      printNewTemplateFiles(gitDiffOutput)
-      def templatesToRegister = extractTemplatesFromGitDiff(gitDiffOutput)
-      if (templatesToRegister.isEmpty()) {
-        println "No templates to register after parsing."
-        return
-      }
-      
-      printTemplatesToRegister(templatesToRegister)
-      def gitMeta = getGitMetadata()
-      printGitMetadata(gitMeta)
-      registerTemplates(templatesToRegister, gitMeta, app_env)
-      println "=== Template Registration for ${app_env.short_name.toUpperCase()} Completed ==="
     }
   }
 }
