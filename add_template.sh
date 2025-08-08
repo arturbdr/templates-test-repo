@@ -44,7 +44,9 @@ TEMPLATE_FILE="${TEMPLATE_DIR}/${VERSION}.tsx"
 FIXTURES_FILE="${TEMPLATE_DIR}/${VERSION}.fixtures.json"
 
 echo "Creating template file: $TEMPLATE_FILE"
-echo "${TEMPLATE_NAME^} Template $VERSION - $(date)" > "$TEMPLATE_FILE"
+# Capitalize first letter of template name (POSIX compatible)
+CAPITALIZED_TEMPLATE_NAME="$(printf '%s' "$TEMPLATE_NAME" | sed 's/^\(.\)/\U\1/')"
+echo "${CAPITALIZED_TEMPLATE_NAME} Template $VERSION - $(date)" > "$TEMPLATE_FILE"
 
 echo "Creating fixtures file: $FIXTURES_FILE"
 cat > "$FIXTURES_FILE" << EOF
