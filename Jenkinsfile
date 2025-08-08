@@ -6,27 +6,61 @@ pipeline {
     }
     
     stages {
+        stage('Debug Info') {
+            steps {
+                script {
+                    echo "=== Debug Information ==="
+                    echo "Branch Name: ${env.BRANCH_NAME}"
+                    echo "Git Branch: ${env.GIT_BRANCH}"
+                    echo "Build Number: ${env.BUILD_NUMBER}"
+                    echo "Document Service URL: ${DOCUMENT_SERVICE_URL}"
+                }
+            }
+        }
+        
         stage('Register New Templates') {
             steps {
                 script {
                     echo "=== Template Registration Pipeline Started ==="
-                    echo "Branch: ${env.BRANCH_NAME}"
-                    echo "Document Service URL: ${DOCUMENT_SERVICE_URL}"
                     
                     // Get git diff to find new template files
                     echo "Getting git diff from HEAD~1 to HEAD..."
-                    def gitDiffOutput = sh(
-                        script: """
-                            git diff HEAD~1 HEAD --name-status | 
-                            grep '^A' | 
-                            grep 'src/templates/.*/v[0-9]*.tsx' | 
-                            awk '{print \$2}'
-                        """,
-                        returnStdout: true
-                    ).trim()
+                    
+                    def gitDiffOutput = ""
+                    try {
+                        gitDiffOutput = sh(
+                            script: """
+                                git diff HEAD~1 HEAD --name-status | 
+                                grep '^A' | 
+                                grep 'src/templates/.*/v[0-9]*.tsx' | 
+                                awk '{print \$2}'
+                            """,
+                            returnStdout: true
+                        ).trim()
+                    } catch (Exception e) {
+                        echo "Git diff failed (maybe first commit?): ${e.message}"
+                        echo "Trying alternative approach..."
+                        try {
+                            gitDiffOutput = sh(
+                                script: """
+                                    git show --name-status --pretty=format: HEAD | 
+                                    grep '^A' | 
+                                    grep 'src/templates/.*/v[0-9]*.tsx' | 
+                                    awk '{print \$2}'
+                                """,
+                                returnStdout: true
+                            ).trim()
+                        } catch (Exception e2) {
+                            echo "Alternative git approach also failed: ${e2.message}"
+                        }
+                    }
                     
                     if (!gitDiffOutput) {
-                        echo "No new template versions detected in git diff. Skipping registration."
+                        echo "No new template versions detected in git diff."
+                        echo "This might be because:"
+                        echo "1. No new .tsx files were added"
+                        echo "2. This is the first commit"
+                        echo "3. Files don't match the pattern src/templates/*/v[0-9]*.tsx"
                         return
                     }
                     
@@ -63,15 +97,6 @@ pipeline {
                     
                     echo "=== Template Registration Pipeline Completed ==="
                 }
-            }
-        }
-        
-        stage('Skip Non-Main Branch') {
-            when {
-                not { branch 'main' }
-            }
-            steps {
-                echo "Not on main branch (current: ${env.BRANCH_NAME}). Skipping template registration."
             }
         }
     }
