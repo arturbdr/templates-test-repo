@@ -7,9 +7,6 @@ pipeline {
     
     stages {
         stage('Register New Templates') {
-            when {
-                branch 'main'
-            }
             steps {
                 script {
                     echo "=== Template Registration Pipeline Started ==="
