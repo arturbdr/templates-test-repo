@@ -1,5 +1,8 @@
 libraries {
     sdp
+    git {
+        github
+    }
 }
 
 application_environments {
