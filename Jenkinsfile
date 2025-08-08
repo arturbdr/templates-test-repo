@@ -167,7 +167,8 @@ void registerTemplateWithDocumentService(Map template, String gitHash, String gi
             ]
         ]
         
-        def jsonPayload = writeJSON returnText: true, json: payload
+        // Use Groovy's built-in JSON serialization
+        def jsonPayload = groovy.json.JsonOutput.toJson(payload)
         echo "Sending payload to ${DOCUMENT_SERVICE_URL}/webhooks/backoffice/v1/templates"
         echo "Payload: ${jsonPayload}"
         
@@ -186,9 +187,9 @@ void registerTemplateWithDocumentService(Map template, String gitHash, String gi
         echo "HTTP Status: ${response.status}"
         echo "Response Body: ${response.content}"
         
-        // Try to parse templateId from response
+        // Try to parse templateId from response using Groovy's JsonSlurper
         try {
-            def responseData = readJSON text: response.content
+            def responseData = new groovy.json.JsonSlurper().parseText(response.content)
             echo "Template ID: ${responseData.templateId}"
         } catch (Exception e) {
             echo "Note: Could not parse templateId from response: ${e.message}"
