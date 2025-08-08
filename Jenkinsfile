@@ -9,11 +9,11 @@ pipeline {
         stage('Debug Info') {
             steps {
                 script {
-                    echo "=== Debug Information ==="
-                    echo "Branch Name: ${env.BRANCH_NAME}"
-                    echo "Git Branch: ${env.GIT_BRANCH}"
-                    echo "Build Number: ${env.BUILD_NUMBER}"
-                    echo "Document Service URL: ${DOCUMENT_SERVICE_URL}"
+                    println "=== Debug Information ==="
+                    println "Branch Name: ${env.BRANCH_NAME}"
+                    println "Git Branch: ${env.GIT_BRANCH}"
+                    println "Build Number: ${env.BUILD_NUMBER}"
+                    println "Document Service URL: ${DOCUMENT_SERVICE_URL}"
                 }
             }
         }
@@ -21,11 +21,11 @@ pipeline {
         stage('Register New Templates') {
             steps {
                 script {
-                    echo "=== Template Registration Pipeline Started ==="
-                    
+                    println "=== Template Registration Pipeline Started ==="
+
                     // Get git diff to find new template files
-                    echo "Getting git diff from HEAD~1 to HEAD..."
-                    
+                    println "Getting git diff from HEAD~1 to HEAD..."
+
                     def gitDiffOutput = ""
                     try {
                         gitDiffOutput = sh(
@@ -38,8 +38,8 @@ pipeline {
                             returnStdout: true
                         ).trim()
                     } catch (Exception e) {
-                        echo "Git diff failed (maybe first commit?): ${e.message}"
-                        echo "Trying alternative approach..."
+                        println "Git diff failed (maybe first commit?): ${e.message}"
+                        println "Trying alternative approach..."
                         try {
                             gitDiffOutput = sh(
                                 script: """
@@ -51,33 +51,33 @@ pipeline {
                                 returnStdout: true
                             ).trim()
                         } catch (Exception e2) {
-                            echo "Alternative git approach also failed: ${e2.message}"
+                            println "Alternative git approach also failed: ${e2.message}"
                         }
                     }
                     
                     if (!gitDiffOutput) {
-                        echo "No new template versions detected in git diff."
-                        echo "This might be because:"
-                        echo "1. No new .tsx files were added"
-                        echo "2. This is the first commit"
-                        echo "3. Files don't match the pattern src/templates/*/v[0-9]*.tsx"
+                        println "No new template versions detected in git diff."
+                        println "This might be because:"
+                        println "1. No new .tsx files were added"
+                        println "2. This is the first commit"
+                        println "3. Files don't match the pattern src/templates/*/v[0-9]*.tsx"
                         return
                     }
                     
-                    echo "New template files detected:"
-                    echo gitDiffOutput
-                    
+                    println "New template files detected:"
+                    println gitDiffOutput
+
                     // Parse template information
                     def templatesToRegister = parseNewTemplates(gitDiffOutput)
                     
                     if (templatesToRegister.isEmpty()) {
-                        echo "No templates to register after parsing."
+                        println "No templates to register after parsing."
                         return
                     }
                     
-                    echo "Templates to register after parsing:"
+                    println "Templates to register after parsing:"
                     templatesToRegister.each { template ->
-                        echo "- ${template.code}:${template.version} (from ${template.filePath})"
+                        println "- ${template.code}:${template.version} (from ${template.filePath})"
                     }
                     
                     // Get git metadata
@@ -85,17 +85,17 @@ pipeline {
                     def gitCommitMessage = sh(script: "git log -1 --pretty=%B", returnStdout: true).trim()
                     def gitCommitTimestamp = sh(script: "git log -1 --pretty=%cI", returnStdout: true).trim()
                     
-                    echo "=== Git Metadata ==="
-                    echo "Hash: ${gitCommitHash}"
-                    echo "Message: ${gitCommitMessage}"
-                    echo "Timestamp: ${gitCommitTimestamp}"
-                    
+                    println "=== Git Metadata ==="
+                    println "Hash: ${gitCommitHash}"
+                    println "Message: ${gitCommitMessage}"
+                    println "Timestamp: ${gitCommitTimestamp}"
+
                     // Register each template
                     templatesToRegister.each { template ->
                         registerTemplateWithDocumentService(template, gitCommitHash, gitCommitMessage, gitCommitTimestamp)
                     }
                     
-                    echo "=== Template Registration Pipeline Completed ==="
+                    println "=== Template Registration Pipeline Completed ==="
                 }
             }
         }
@@ -107,20 +107,20 @@ List parseNewTemplates(String gitDiffOutput) {
     def templates = [:]
     def lines = gitDiffOutput.split('\n')
     
-    echo "=== Parsing Git Diff Output ==="
+    println "=== Parsing Git Diff Output ==="
     lines.each { line ->
         if (line.trim().isEmpty()) return
         
-        echo "Processing line: ${line}"
-        
+        println "Processing line: ${line}"
+
         // Parse: src/templates/property-brochure/v2.tsx
         def matcher = line =~ /src\/templates\/([^\/]+)\/v(\d+)\.tsx$/
         if (matcher.find()) {
             def templateCode = matcher.group(1)
             def version = "v${matcher.group(2)}"
             
-            echo "Found template: code='${templateCode}', version='${version}', file='${line}'"
-            
+            println "Found template: code='${templateCode}', version='${version}', file='${line}'"
+
             // Keep only the highest version per template
             if (!templates[templateCode] || compareVersions(version, templates[templateCode].version) > 0) {
                 templates[templateCode] = [
@@ -128,12 +128,12 @@ List parseNewTemplates(String gitDiffOutput) {
                     version: version,
                     filePath: line
                 ]
-                echo "  -> Set as highest version for '${templateCode}': ${version}"
+                println "  -> Set as highest version for '${templateCode}': ${version}"
             } else {
-                echo "  -> Skipping '${version}' (current highest for '${templateCode}': '${templates[templateCode].version}')"
+                println "  -> Skipping '${version}' (current highest for '${templateCode}': '${templates[templateCode].version}')"
             }
         } else {
-            echo "  -> Line doesn't match template pattern, skipping"
+            println "  -> Line doesn't match template pattern, skipping"
         }
     }
     
@@ -149,8 +149,8 @@ int compareVersions(String version1, String version2) {
 
 // Register template with document-service
 void registerTemplateWithDocumentService(Map template, String gitHash, String gitMessage, String gitTimestamp) {
-    echo "=== Registering Template: ${template.code}:${template.version} ==="
-    
+    println "=== Registering Template: ${template.code}:${template.version} ==="
+
     try {
         // Build request payload
         def payload = [
@@ -169,9 +169,9 @@ void registerTemplateWithDocumentService(Map template, String gitHash, String gi
         
         // Use Groovy's built-in JSON serialization
         def jsonPayload = groovy.json.JsonOutput.toJson(payload)
-        echo "Sending payload to ${DOCUMENT_SERVICE_URL}/webhooks/backoffice/v1/templates"
-        echo "Payload: ${jsonPayload}"
-        
+        println "Sending payload to ${DOCUMENT_SERVICE_URL}/webhooks/backoffice/v1/templates"
+        println "Payload: ${jsonPayload}"
+
         // Make HTTP call to document-service
         def response = httpRequest(
             httpMode: 'POST',
@@ -183,22 +183,22 @@ void registerTemplateWithDocumentService(Map template, String gitHash, String gi
             ignoreSslErrors: true
         )
         
-        echo "✅ Registration successful!"
-        echo "HTTP Status: ${response.status}"
-        echo "Response Body: ${response.content}"
-        
+        println "✅ Registration successful!"
+        println "HTTP Status: ${response.status}"
+        println "Response Body: ${response.content}"
+
         // Try to parse templateId from response using Groovy's JsonSlurper
         try {
             def responseData = new groovy.json.JsonSlurper().parseText(response.content)
-            echo "Template ID: ${responseData.templateId}"
+            println "Template ID: ${responseData.templateId}"
         } catch (Exception e) {
-            echo "Note: Could not parse templateId from response: ${e.message}"
+            println "Note: Could not parse templateId from response: ${e.message}"
         }
         
     } catch (Exception e) {
-        echo "❌ Registration failed for ${template.code}:${template.version}"
-        echo "Error: ${e.message}"
-        echo "This will not fail the build, marking as unstable"
+        println "❌ Registration failed for ${template.code}:${template.version}"
+        println "Error: ${e.message}"
+        println "This will not fail the build, marking as unstable"
         currentBuild.result = 'UNSTABLE'
     }
 }
