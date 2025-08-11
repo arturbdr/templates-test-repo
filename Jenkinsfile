@@ -18,7 +18,7 @@ void register_templates(app_env) {
     stage("Register Templates - ${app_env.short_name}") {
       script {
         echo """=== Template Registration for ${app_env.short_name.toUpperCase()} ==="
-         "Document Service URL: ${app_env.document_service_url}"""
+         \n"Document Service URL: ${app_env.document_service_url}"""
 
         // Get git diff to find new template files (last commit only)
         def gitDiffOutput = getNewTemplateFilesFromGit()
@@ -84,8 +84,7 @@ String getNewTemplateFilesFromGit() {
  * Prints a message when no new templates are found.
  */
 void printNoTemplatesFoundMessage() {
-  echo """
-        No new template versions detected in git diff.
+  echo """No new template versions detected in git diff.
         This might be because:
         1. No new .tsx files were added
         2. This is the first commit
