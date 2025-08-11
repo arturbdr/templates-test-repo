@@ -11,6 +11,13 @@
  *    - Ignores deletions of existing versions
  *    - Only calls webhook for truly NEW template versions
  *
+ * GIT CONTEXT HANDLING:
+ * This pipeline handles git context issues that commonly occur in Jenkins:
+ * - Uses checkout scm to ensure git repository is available
+ * - Multiple fallback strategies for git commands
+ * - Jenkins environment variable fallback when git commands fail
+ * - Comprehensive error handling and debugging
+ *
  * Usage:
  * - on_change to: develop, { register_templates dev }
  *
@@ -20,8 +27,10 @@
  * The pipeline will:
  * 1. Detect NEW template files from git diff (only added files with ^A status)
  * 2. Fall back to git show if git diff fails (handles shallow clones)
- * 3. Only register NEW template versions with the document service
- * 4. Provide detailed debugging information if no NEW templates are found
+ * 3. Fall back to git log if git show fails
+ * 4. Fall back to Jenkins environment variables if all git commands fail
+ * 5. Only register NEW template versions with the document service
+ * 6. Provide detailed debugging information if no NEW templates are found
  *
  * Example scenarios:
  * - v3.tsx added -> Will process and register v3
@@ -50,6 +59,9 @@ void register_templates(app_env) {
   node {
     stage("Register Templates - ${app_env.short_name}") {
       script {
+        // Ensure we're in the right directory and git repository is available
+        checkout scm
+
         echo """=== Template Registration for ${app_env.short_name.toUpperCase()} ==="
          \n"Document Service URL: ${app_env.document_service_url}"
          \n"Processing: NEW template versions ONLY (ignores changes to existing versions)"""
@@ -86,6 +98,18 @@ void register_templates(app_env) {
  */
 String getNewTemplateFilesFromGit() {
   echo "Getting git diff to find NEW template versions (last commit only)..."
+
+  // First, verify we're in a git repository
+  try {
+    sh "git status"
+    echo "Git repository verified successfully"
+  } catch (Exception e) {
+    echo "ERROR: Not in a git repository or git not available"
+    echo "Current directory: ${pwd()}"
+    echo "Directory contents:"
+    sh "ls -la"
+    return ""
+  }
 
   // First, check if we have enough git history
   def gitDepth = sh(script: "git rev-list --count HEAD", returnStdout: true).trim().toInteger()
@@ -142,7 +166,72 @@ String getNewTemplateFilesFromGitShow() {
     ).trim()
   } catch (Exception e) {
     echo "Git show approach also failed: ${e.message}"
-    echo "Note: This approach only works for NEW files, not changes to existing versions"
+    echo "Trying alternative approach using git log..."
+    return getNewTemplateFilesFromGitLog()
+  }
+}
+
+/**
+ * Gets new template files using git log as a last resort.
+ * @return String with file paths, one per line.
+ */
+String getNewTemplateFilesFromGitLog() {
+  try {
+    echo "Using git log to find NEW template versions..."
+    // Get the last commit hash and try to show its changes
+    def lastCommit = sh(script: "git log -1 --pretty=%H", returnStdout: true).trim()
+    echo "Last commit hash: ${lastCommit}"
+
+    return sh(
+      script: """
+        git show --name-status --pretty=format: ${lastCommit} |
+        grep '^A' |
+        grep 'src/templates/.*/v[0-9]*.tsx' |
+        awk '{print \$2}'
+      """,
+      returnStdout: true
+    ).trim()
+  } catch (Exception e) {
+    echo "Git log approach also failed: ${e.message}"
+    echo "Trying to use Jenkins environment information..."
+    return getNewTemplateFilesFromJenkinsEnv()
+  }
+}
+
+/**
+ * Gets new template files using Jenkins environment information as final fallback.
+ * @return String with file paths, one per line.
+ */
+String getNewTemplateFilesFromJenkinsEnv() {
+  try {
+    echo "Using Jenkins environment information to find NEW template versions..."
+
+    // Check if we have git information in Jenkins environment
+    def gitCommit = env.GIT_COMMIT ?: env.GIT_COMMIT_HASH ?: env.COMMIT_HASH
+    def gitBranch = env.GIT_BRANCH ?: env.BRANCH_NAME
+
+    echo "Jenkins Git Info - Commit: ${gitCommit}, Branch: ${gitBranch}"
+
+    if (gitCommit) {
+      echo "Attempting to use Jenkins git commit: ${gitCommit}"
+      return sh(
+        script: """
+          git show --name-status --pretty=format: ${gitCommit} |
+          grep '^A' |
+          grep 'src/templates/.*/v[0-9]*.tsx' |
+          awk '{print \$2}'
+        """,
+        returnStdout: true
+      ).trim()
+    } else {
+      echo "No git commit information available in Jenkins environment"
+      echo "Available environment variables:"
+      sh "env | grep -i git || echo 'No git-related environment variables found'"
+      return ""
+    }
+  } catch (Exception e) {
+    echo "Jenkins environment approach also failed: ${e.message}"
+    echo "All approaches failed. This indicates a serious configuration issue."
     return ""
   }
 }
@@ -177,23 +266,53 @@ void debugGitAndWorkingDirectory() {
     echo "Current working directory:"
     sh "pwd && ls -la"
 
-    echo "Git status:"
-    sh "git status --porcelain"
+    echo "Git repository status:"
+    try {
+      sh "git status"
+    } catch (Exception e) {
+      echo "Git status failed: ${e.message}"
+    }
+
+    echo "Git remote information:"
+    try {
+      sh "git remote -v"
+    } catch (Exception e) {
+      echo "Git remote failed: ${e.message}"
+    }
+
+    echo "Git branch information:"
+    try {
+      sh "git branch -a"
+    } catch (Exception e) {
+      echo "Git branch failed: ${e.message}"
+    }
 
     echo "Git log (last 3 commits):"
-    sh "git log --oneline -3"
+    try {
+      sh "git log --oneline -3"
+    } catch (Exception e) {
+      echo "Git log failed: ${e.message}"
+    }
 
     echo "Git depth:"
-    sh "git rev-list --count HEAD"
+    try {
+      sh "git rev-list --count HEAD"
+    } catch (Exception e) {
+      echo "Git depth check failed: ${e.message}"
+    }
 
     echo "Template directory contents:"
     sh "find src/templates -type f 2>/dev/null || echo 'src/templates directory not found'"
 
     echo "Git diff status for last commit (showing what changed):"
-    if (sh(script: "git rev-list --count HEAD", returnStdout: true).trim().toInteger() > 1) {
-      sh "git diff HEAD~1 HEAD --name-status | grep 'src/templates' || echo 'No template files changed in last commit'"
-    } else {
-      echo "Single commit - no diff available"
+    try {
+      if (sh(script: "git rev-list --count HEAD", returnStdout: true).trim().toInteger() > 1) {
+        sh "git diff HEAD~1 HEAD --name-status | grep 'src/templates' || echo 'No template files changed in last commit'"
+      } else {
+        echo "Single commit - no diff available"
+      }
+    } catch (Exception e) {
+      echo "Git diff check failed: ${e.message}"
     }
 
     echo "All .tsx files in project:"
