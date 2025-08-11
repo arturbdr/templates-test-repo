@@ -1,3 +1,28 @@
+/**
+ * This pipeline automatically detects and registers NEW template versions ONLY
+ * when changes are pushed to specific branches.
+ *
+ * IMPORTANT RULES:
+ * 1. Git diff scope: Only processes the last commit that was pushed to the branch
+ * 2. Version processing: ONLY processes NEW versions (like v3 being added)
+ *    - Ignores changes to existing versions (like v2 being modified)
+ *    - Ignores deletions of existing versions
+ *    - Only calls webhook for truly NEW template versions
+ *
+ * Parameters:
+ * - app_env: Environment configuration (dev, staging, prod)
+ *
+ * The pipeline will:
+ * 1. Detect NEW template files
+ * 2. Only register NEW template versions with the document service
+ *
+ * Example scenarios:
+ * - v3.tsx added -> Will process and register v3
+ * - v2.tsx modified -> Will NOT process (ignored)
+ * - v1.tsx deleted -> Will NOT process (ignored)
+ * - v2.tsx content changed -> Will NOT process (ignored)
+ */
+
 on_change to: develop, {
   register_templates dev
 }
@@ -14,44 +39,84 @@ on_change to: production, {
  * Main entrypoint for the template registration pipeline.
  */
 void register_templates(app_env) {
-  node {
-    stage("Register Templates - ${app_env.short_name}") {
-      script {
-        echo """=== Template Registration for ${app_env.short_name.toUpperCase()} ==="
-         \n"Document Service URL: ${app_env.document_service_url}"""
+  withChecks('Template Registration') {
+    node {
+      stage("Register Templates - ${app_env.short_name}") {
+        script {
+          try {
+            // Ensure we're in the right directory and git repository is available
+            checkout scm
 
-        // Get git diff to find new template files (last commit only)
-        def gitDiffOutput = getNewTemplateFilesFromGit()
-        if (!gitDiffOutput) {
-          printNoTemplatesFoundMessage()
-          return
+            echo """=== Template Registration for ${app_env.short_name.toUpperCase()} ==="
+             \n"Document Service URL: ${app_env.document_service_url}"
+             \n"Processing: NEW template versions ONLY (ignores changes to existing versions)"""
+
+            // Get git diff to find NEW template files (last commit only)
+            def gitDiffOutput = getNewTemplateFilesFromGit()
+            if (!gitDiffOutput) {
+              printNoTemplatesFoundMessage()
+              echo "No NEW template versions to register. Exiting."
+              publishChecks name: 'Template Registration',
+                           title: 'Template Registration Completed',
+                           summary: 'No new templates to register',
+                           status: 'COMPLETED',
+                           conclusion: 'SUCCESS',
+                           detailsURL: env.BUILD_URL
+              return
+            }
+
+            printNewTemplateFiles(gitDiffOutput)
+            def templatesToRegister = extractTemplatesFromGitDiff(gitDiffOutput)
+            if (templatesToRegister.isEmpty()) {
+              echo "No NEW templates to register after parsing."
+              publishChecks name: 'Template Registration',
+                           title: 'Template Registration Completed',
+                           summary: 'No new templates to register after parsing',
+                           status: 'COMPLETED',
+                           conclusion: 'SUCCESS',
+                           detailsURL: env.BUILD_URL
+
+              return
+            }
+
+            printTemplatesToRegister(templatesToRegister)
+            def gitMeta = getGitMetadata()
+            printGitMetadata(gitMeta)
+            registerTemplates(templatesToRegister, gitMeta, app_env)
+            echo "=== Template Registration for ${app_env.short_name.toUpperCase()} Completed ==="
+
+            publishChecks name: 'Template Registration',
+                         title: 'Template Registration Completed',
+                         summary: "Successfully registered ${templatesToRegister.size()} template(s)",
+                         status: 'COMPLETED',
+                         conclusion: 'SUCCESS',
+                         detailsURL: env.BUILD_URL
+          } catch (Exception e) {
+            publishChecks name: 'Template Registration',
+                         title: 'Template Registration Failed',
+                         summary: "Failed to register templates: ${e.message}",
+                         status: 'COMPLETED',
+                         conclusion: 'FAILURE',
+                         detailsURL: env.BUILD_URL
+            throw e
+          }
         }
-
-        printNewTemplateFiles(gitDiffOutput)
-        def templatesToRegister = extractTemplatesFromGitDiff(gitDiffOutput)
-        if (templatesToRegister.isEmpty()) {
-          echo "No templates to register after parsing."
-          return
-        }
-
-        printTemplatesToRegister(templatesToRegister)
-        def gitMeta = getGitMetadata()
-        printGitMetadata(gitMeta)
-        registerTemplates(templatesToRegister, gitMeta, app_env)
-        echo "=== Template Registration for ${app_env.short_name.toUpperCase()} Completed ==="
       }
     }
   }
 }
 
 /**
- * Gets new template files from git diff (last commit).
+ * Gets new template files from git diff (last commit only).
+ * Only processes NEW versions, ignores changes to existing versions.
  * @return String with file paths, one per line.
  */
 String getNewTemplateFilesFromGit() {
-  echo "Getting git diff from HEAD~1 to HEAD (last commit only)..."
+  echo "Getting git diff to find NEW template versions (last commit only)..."
+
   try {
-    return sh(
+    echo "Using git diff HEAD~1 HEAD to find NEW template versions..."
+    def result = sh(
       script: """
         git diff HEAD~1 HEAD --name-status |
         grep '^A' |
@@ -60,40 +125,37 @@ String getNewTemplateFilesFromGit() {
       """,
       returnStdout: true
     ).trim()
-  } catch (Exception e) {
-    echo "Git diff failed (maybe first commit?): ${e.message}"
-    echo "Trying alternative approach..."
-    try {
-      return sh(
-        script: """
-          git show --name-status --pretty=format: HEAD |
-          grep '^A' |
-          grep 'src/templates/.*/v[0-9]*.tsx' |
-          awk '{print \$2}'
-        """,
-        returnStdout: true
-      ).trim()
-    } catch (Exception e2) {
-      echo "Alternative git approach also failed: ${e2.message}"
+
+    if (result) {
+      echo "Git diff successful - found NEW template versions"
+      return result
+    } else {
+      echo "No NEW template versions found in git diff"
       return ""
     }
+  } catch (Exception e) {
+    echo "Git diff failed: ${e.message}"
+    echo "This might indicate a shallow clone or single commit"
+    return ""
   }
 }
 
-/**
- * Prints a message when no new templates are found.
- */
 void printNoTemplatesFoundMessage() {
-  echo """No new template versions detected in git diff.
+  echo """No NEW template versions detected in git diff.
         This might be because:
-        1. No new .tsx files were added
-        2. This is the first commit
-        3. Files don't match the pattern src/templates/*/v[0-9]*.tsx"""
+        1. No NEW .tsx files were added (only existing ones were modified/deleted)
+        2. This is the first commit or shallow clone
+        3. Files don't match the pattern src/templates/.*/v[0-9]*.tsx
+
+        REMEMBER: This pipeline only processes NEW versions, not changes to existing ones.
+        - v3.tsx added -> Will process and register v3
+        - v2.tsx modified -> Will NOT process (ignored)
+        - v1.tsx deleted -> Will NOT process (ignored)"""
+
 }
 
 /**
  * Prints the new template files detected.
- * @param gitDiffOutput String with file paths.
  */
 void printNewTemplateFiles(String gitDiffOutput) {
   echo "New template files detected:"
@@ -102,8 +164,6 @@ void printNewTemplateFiles(String gitDiffOutput) {
 
 /**
  * Extracts template information from git diff output.
- * @param gitDiffOutput String with file paths.
- * @return List of template maps.
  */
 List extractTemplatesFromGitDiff(String gitDiffOutput) {
   echo "=== Parsing Git Diff Output ==="
@@ -118,8 +178,6 @@ List extractTemplatesFromGitDiff(String gitDiffOutput) {
 
 /**
  * Processes a single line from git diff and updates the templates map.
- * @param line String file path.
- * @param templates Map of templateCode -> template info.
  */
 void processGitDiffLine(String line, Map templates) {
   echo "Processing line: ${line}"
@@ -162,7 +220,6 @@ void printTemplatesToRegister(List templatesToRegister) {
 
 /**
  * Gets git metadata for the current commit.
- * @return Map with hash, message, timestamp.
  */
 Map getGitMetadata() {
   [
@@ -193,9 +250,6 @@ void registerTemplates(List templatesToRegister, Map gitMeta, app_env) {
 
 /**
  * Registers a single template with the document service.
- * @param template Map with template info.
- * @param gitMeta Map with git metadata.
- * @param app_env Environment configuration.
  */
 void registerTemplateWithDocumentService(Map template, Map gitMeta, app_env) {
   echo "=== Registering Template: ${template.code}:${template.version} with ${app_env.short_name.toUpperCase()} ==="
@@ -204,14 +258,14 @@ void registerTemplateWithDocumentService(Map template, Map gitMeta, app_env) {
     def jsonPayload = groovy.json.JsonOutput.toJson(payload)
     echo "Sending payload to ${app_env.document_service_url}/webhooks/backoffice/v1/templates"
     echo "Payload: ${jsonPayload}"
-    
+
     def response = sendDocumentServiceRequest(jsonPayload, app_env)
     printDocumentServiceResponse(response)
   } catch (Exception e) {
     echo "Registration failed for ${template.code}:${template.version}"
     echo "Error: ${e.message}"
-    echo "This will not fail the build, marking as unstable"
-    currentBuild.result = 'UNSTABLE'
+    // Re-throw the exception to fail the check
+    throw e
   }
 }
 
@@ -223,7 +277,7 @@ Map buildDocumentServicePayload(Map template, Map gitMeta, app_env) {
     code: template.code,
     version: template.version,
     git: [
-      repo: "arturbdr/templates-test-repo",
+      repo: getRepositoryName(),
       commit: [
         hash: gitMeta.hash,
         message: gitMeta.message,
@@ -234,10 +288,25 @@ Map buildDocumentServicePayload(Map template, Map gitMeta, app_env) {
 }
 
 /**
+ * Gets the repository name from git remote origin.
+ */
+String getRepositoryName() {
+  try {
+    def remoteUrl = sh(
+      script: "git config --get remote.origin.url",
+      returnStdout: true
+    ).trim()
+
+    // Extract repo name from URL like https://github.com/Huspy/doc-service.git
+    return remoteUrl.replaceAll('^https?://[^/]+/', '').replaceAll('\\.git$', '')
+  } catch (Exception e) {
+    echo "Warning: Could not determine repository name from git remote: ${e.message}"
+    return 'unknown-repo'
+  }
+}
+
+/**
  * Sends the HTTP request to the document service using Jenkins HTTP Request plugin.
- * @param jsonPayload String JSON payload.
- * @param app_env Environment configuration.
- * @return Response object.
  */
 def sendDocumentServiceRequest(String jsonPayload, app_env) {
   httpRequest(
