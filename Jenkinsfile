@@ -1,4 +1,37 @@
+/**
+ * Jenkins Pipeline for Template Registration
+ *
+ * This pipeline automatically detects and registers NEW template versions ONLY
+ * when changes are pushed to specific branches.
+ *
+ * IMPORTANT RULES:
+ * 1. Git diff scope: Only processes the last commit that was pushed to the branch
+ * 2. Version processing: ONLY processes NEW versions (like v3 being added)
+ *    - Ignores changes to existing versions (like v2 being modified)
+ *    - Ignores deletions of existing versions
+ *    - Only calls webhook for truly NEW template versions
+ *
+ * Usage:
+ * - on_change to: develop, { register_templates dev }
+ *
+ * Parameters:
+ * - app_env: Environment configuration (dev, staging, prod)
+ *
+ * The pipeline will:
+ * 1. Detect NEW template files from git diff (only added files with ^A status)
+ * 2. Fall back to git show if git diff fails (handles shallow clones)
+ * 3. Only register NEW template versions with the document service
+ * 4. Provide detailed debugging information if no NEW templates are found
+ *
+ * Example scenarios:
+ * - v3.tsx added -> Will process and register v3
+ * - v2.tsx modified -> Will NOT process (ignored)
+ * - v1.tsx deleted -> Will NOT process (ignored)
+ * - v2.tsx content changed -> Will NOT process (ignored)
+ */
+
 on_change to: develop, {
+  // Only registers NEW template versions (ignores changes to existing versions)
   register_templates dev
 }
 
@@ -18,19 +51,21 @@ void register_templates(app_env) {
     stage("Register Templates - ${app_env.short_name}") {
       script {
         echo """=== Template Registration for ${app_env.short_name.toUpperCase()} ==="
-         \n"Document Service URL: ${app_env.document_service_url}"""
+         \n"Document Service URL: ${app_env.document_service_url}"
+         \n"Processing: NEW template versions ONLY (ignores changes to existing versions)"""
 
-        // Get git diff to find new template files (last commit only)
+        // Get git diff to find NEW template files (last commit only)
         def gitDiffOutput = getNewTemplateFilesFromGit()
         if (!gitDiffOutput) {
           printNoTemplatesFoundMessage()
+          echo "No NEW template versions to register. Exiting."
           return
         }
 
         printNewTemplateFiles(gitDiffOutput)
         def templatesToRegister = extractTemplatesFromGitDiff(gitDiffOutput)
         if (templatesToRegister.isEmpty()) {
-          echo "No templates to register after parsing."
+          echo "No NEW templates to register after parsing."
           return
         }
 
@@ -45,13 +80,26 @@ void register_templates(app_env) {
 }
 
 /**
- * Gets new template files from git diff (last commit).
+ * Gets new template files from git diff (last commit only).
+ * Only processes NEW versions, ignores changes to existing versions.
  * @return String with file paths, one per line.
  */
 String getNewTemplateFilesFromGit() {
-  echo "Getting git diff from HEAD~1 to HEAD (last commit only)..."
+  echo "Getting git diff to find NEW template versions (last commit only)..."
+
+  // First, check if we have enough git history
+  def gitDepth = sh(script: "git rev-list --count HEAD", returnStdout: true).trim().toInteger()
+  echo "Git depth: ${gitDepth} commits"
+
+  if (gitDepth <= 1) {
+    echo "Shallow clone or single commit detected. Using git show approach..."
+    return getNewTemplateFilesFromGitShow()
+  }
+
+  // Try git diff approach first - ONLY process added files (^A), ignore modifications (^M) and deletions (^D)
   try {
-    return sh(
+    echo "Attempting git diff HEAD~1 HEAD (only NEW files)..."
+    def result = sh(
       script: """
         git diff HEAD~1 HEAD --name-status |
         grep '^A' |
@@ -60,23 +108,42 @@ String getNewTemplateFilesFromGit() {
       """,
       returnStdout: true
     ).trim()
-  } catch (Exception e) {
-    echo "Git diff failed (maybe first commit?): ${e.message}"
-    echo "Trying alternative approach..."
-    try {
-      return sh(
-        script: """
-          git show --name-status --pretty=format: HEAD |
-          grep '^A' |
-          grep 'src/templates/.*/v[0-9]*.tsx' |
-          awk '{print \$2}'
-        """,
-        returnStdout: true
-      ).trim()
-    } catch (Exception e2) {
-      echo "Alternative git approach also failed: ${e2.message}"
-      return ""
+
+    if (result) {
+      echo "Git diff approach successful - found NEW template versions"
+      return result
+    } else {
+      echo "Git diff found no NEW template versions, trying git show approach..."
+      return getNewTemplateFilesFromGitShow()
     }
+  } catch (Exception e) {
+    echo "Git diff failed: ${e.message}"
+    echo "Falling back to git show approach..."
+    return getNewTemplateFilesFromGitShow()
+  }
+}
+
+/**
+ * Gets new template files using git show (works with shallow clones).
+ * Only processes NEW versions, ignores changes to existing versions.
+ * @return String with file paths, one per line.
+ */
+String getNewTemplateFilesFromGitShow() {
+  try {
+    echo "Using git show to find NEW template versions..."
+    return sh(
+      script: """
+        git show --name-status --pretty=format: HEAD |
+        grep '^A' |
+        grep 'src/templates/.*/v[0-9]*.tsx' |
+        awk '{print \$2}'
+      """,
+      returnStdout: true
+    ).trim()
+  } catch (Exception e) {
+    echo "Git show approach also failed: ${e.message}"
+    echo "Note: This approach only works for NEW files, not changes to existing versions"
+    return ""
   }
 }
 
@@ -84,11 +151,57 @@ String getNewTemplateFilesFromGit() {
  * Prints a message when no new templates are found.
  */
 void printNoTemplatesFoundMessage() {
-  echo """No new template versions detected in git diff.
+  echo """No NEW template versions detected in git diff.
         This might be because:
-        1. No new .tsx files were added
-        2. This is the first commit
-        3. Files don't match the pattern src/templates/*/v[0-9]*.tsx"""
+        1. No NEW .tsx files were added (only existing ones were modified/deleted)
+        2. This is the first commit or shallow clone
+        3. Files don't match the pattern src/templates/*/v[0-9]*.tsx
+        4. Git history is limited
+
+        REMEMBER: This pipeline only processes NEW versions, not changes to existing ones.
+        - v3.tsx added -> Will process and register v3
+        - v2.tsx modified -> Will NOT process (ignored)
+        - v1.tsx deleted -> Will NOT process (ignored)"""
+
+  // Add debugging information
+  debugGitAndWorkingDirectory()
+}
+
+/**
+ * Debugs git state and working directory for troubleshooting.
+ */
+void debugGitAndWorkingDirectory() {
+  echo "=== Debug Information ==="
+
+  try {
+    echo "Current working directory:"
+    sh "pwd && ls -la"
+
+    echo "Git status:"
+    sh "git status --porcelain"
+
+    echo "Git log (last 3 commits):"
+    sh "git log --oneline -3"
+
+    echo "Git depth:"
+    sh "git rev-list --count HEAD"
+
+    echo "Template directory contents:"
+    sh "find src/templates -type f 2>/dev/null || echo 'src/templates directory not found'"
+
+    echo "Git diff status for last commit (showing what changed):"
+    if (sh(script: "git rev-list --count HEAD", returnStdout: true).trim().toInteger() > 1) {
+      sh "git diff HEAD~1 HEAD --name-status | grep 'src/templates' || echo 'No template files changed in last commit'"
+    } else {
+      echo "Single commit - no diff available"
+    }
+
+    echo "All .tsx files in project:"
+    sh "find . -name '*.tsx' -type f 2>/dev/null || echo 'No .tsx files found'"
+
+  } catch (Exception e) {
+    echo "Debug commands failed: ${e.message}"
+  }
 }
 
 /**
@@ -204,7 +317,7 @@ void registerTemplateWithDocumentService(Map template, Map gitMeta, app_env) {
     def jsonPayload = groovy.json.JsonOutput.toJson(payload)
     echo "Sending payload to ${app_env.document_service_url}/webhooks/backoffice/v1/templates"
     echo "Payload: ${jsonPayload}"
-    
+
     def response = sendDocumentServiceRequest(jsonPayload, app_env)
     printDocumentServiceResponse(response)
   } catch (Exception e) {
