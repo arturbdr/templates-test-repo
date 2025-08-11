@@ -73,7 +73,7 @@ void register_templates(app_env) {
                            title: 'Template Registration Completed',
                            summary: 'No new templates to register after parsing',
                            status: 'completed',
-                           conclusion: 'success',
+                           conclusion: 'SUCCESS',
                            detailsURL: env.BUILD_URL
 
               return
@@ -89,14 +89,14 @@ void register_templates(app_env) {
                          title: 'Template Registration Completed',
                          summary: "Successfully registered ${templatesToRegister.size()} template(s)",
                          status: 'completed',
-                         conclusion: 'success',
+                         conclusion: 'SUCCESS',
                          detailsURL: env.BUILD_URL
           } catch (Exception e) {
             publishChecks name: 'Template Registration',
                          title: 'Template Registration Failed',
                          summary: "Failed to register templates: ${e.message}",
                          status: 'completed',
-                         conclusion: 'failure',
+                         conclusion: 'FAILURE',
                          detailsURL: env.BUILD_URL
             throw e
           }
