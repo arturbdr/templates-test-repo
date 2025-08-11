@@ -1,6 +1,4 @@
 /**
- * Jenkins Pipeline for Template Registration
- *
  * This pipeline automatically detects and registers NEW template versions ONLY
  * when changes are pushed to specific branches.
  *
@@ -45,33 +43,58 @@ void register_templates(app_env) {
     node {
       stage("Register Templates - ${app_env.short_name}") {
         script {
-          // Ensure we're in the right directory and git repository is available
-          checkout scm
+          try {
+            // Ensure we're in the right directory and git repository is available
+            checkout scm
 
-          echo """=== Template Registration for ${app_env.short_name.toUpperCase()} ==="
-           \n"Document Service URL: ${app_env.document_service_url}"
-           \n"Processing: NEW template versions ONLY (ignores changes to existing versions)"""
+            echo """=== Template Registration for ${app_env.short_name.toUpperCase()} ==="
+             \n"Document Service URL: ${app_env.document_service_url}"
+             \n"Processing: NEW template versions ONLY (ignores changes to existing versions)"""
 
-          // Get git diff to find NEW template files (last commit only)
-          def gitDiffOutput = getNewTemplateFilesFromGit()
-          if (!gitDiffOutput) {
-            printNoTemplatesFoundMessage()
-            echo "No NEW template versions to register. Exiting."
-            return
+            // Get git diff to find NEW template files (last commit only)
+            def gitDiffOutput = getNewTemplateFilesFromGit()
+            if (!gitDiffOutput) {
+              printNoTemplatesFoundMessage()
+              echo "No NEW template versions to register. Exiting."
+              publishChecks name: 'Template Registration',
+                           title: 'Template Registration Completed',
+                           summary: 'No new templates to register',
+                           status: 'SUCCESS'
+              return
+            }
+
+            printNewTemplateFiles(gitDiffOutput)
+            def templatesToRegister = extractTemplatesFromGitDiff(gitDiffOutput)
+            if (templatesToRegister.isEmpty()) {
+              echo "No NEW templates to register after parsing."
+              publishChecks name: 'Template Registration',
+                           title: 'Template Registration Completed',
+                           summary: 'No new templates to register after parsing',
+                           status: 'SUCCESS'
+              return
+            }
+
+            printTemplatesToRegister(templatesToRegister)
+            def gitMeta = getGitMetadata()
+            printGitMetadata(gitMeta)
+            registerTemplates(templatesToRegister, gitMeta, app_env)
+            echo "=== Template Registration for ${app_env.short_name.toUpperCase()} Completed ==="
+
+            // Report success
+            publishChecks name: 'Template Registration',
+                         title: 'Template Registration Completed',
+                         summary: "Successfully registered ${templatesToRegister.size()} template(s)",
+                         status: 'SUCCESS',
+                         detailsURL: env.BUILD_URL
+          } catch (Exception e) {
+            // Report failure
+            publishChecks name: 'Template Registration',
+                         title: 'Template Registration Failed',
+                         summary: "Failed to register templates: ${e.message}",
+                         status: 'FAILURE',
+                         detailsURL: env.BUILD_URL
+            throw e
           }
-
-          printNewTemplateFiles(gitDiffOutput)
-          def templatesToRegister = extractTemplatesFromGitDiff(gitDiffOutput)
-          if (templatesToRegister.isEmpty()) {
-            echo "No NEW templates to register after parsing."
-            return
-          }
-
-          printTemplatesToRegister(templatesToRegister)
-          def gitMeta = getGitMetadata()
-          printGitMetadata(gitMeta)
-          registerTemplates(templatesToRegister, gitMeta, app_env)
-          echo "=== Template Registration for ${app_env.short_name.toUpperCase()} Completed ==="
         }
       }
     }
@@ -249,7 +272,7 @@ Map buildDocumentServicePayload(Map template, Map gitMeta, app_env) {
     code: template.code,
     version: template.version,
     git: [
-      repo: "arturbdr/templates-test-repo",
+      repo: getRepositoryName(),
       commit: [
         hash: gitMeta.hash,
         message: gitMeta.message,
@@ -257,6 +280,24 @@ Map buildDocumentServicePayload(Map template, Map gitMeta, app_env) {
       ]
     ]
   ]
+}
+
+/**
+ * Gets the repository name from git remote origin.
+ */
+String getRepositoryName() {
+  try {
+    def remoteUrl = sh(
+      script: "git config --get remote.origin.url",
+      returnStdout: true
+    ).trim()
+
+    // Extract repo name from URL like https://github.com/Huspy/doc-service.git
+    return remoteUrl.replaceAll('^https?://[^/]+/', '').replaceAll('\\.git$', '')
+  } catch (Exception e) {
+    echo "Warning: Could not determine repository name from git remote: ${e.message}"
+    return 'unknown-repo'
+  }
 }
 
 /**
