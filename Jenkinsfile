@@ -59,7 +59,9 @@ void register_templates(app_env) {
               publishChecks name: 'Template Registration',
                            title: 'Template Registration Completed',
                            summary: 'No new templates to register',
-                           status: 'SUCCESS'
+                           status: 'completed',
+                           conclusion: 'success',
+                           detailsURL: env.BUILD_URL
               return
             }
 
@@ -70,7 +72,10 @@ void register_templates(app_env) {
               publishChecks name: 'Template Registration',
                            title: 'Template Registration Completed',
                            summary: 'No new templates to register after parsing',
-                           status: 'SUCCESS'
+                           status: 'completed',
+                           conclusion: 'success',
+                           detailsURL: env.BUILD_URL
+
               return
             }
 
@@ -80,18 +85,18 @@ void register_templates(app_env) {
             registerTemplates(templatesToRegister, gitMeta, app_env)
             echo "=== Template Registration for ${app_env.short_name.toUpperCase()} Completed ==="
 
-            // Report success
             publishChecks name: 'Template Registration',
                          title: 'Template Registration Completed',
                          summary: "Successfully registered ${templatesToRegister.size()} template(s)",
-                         status: 'SUCCESS',
+                         status: 'completed',
+                         conclusion: 'success',
                          detailsURL: env.BUILD_URL
           } catch (Exception e) {
-            // Report failure
             publishChecks name: 'Template Registration',
                          title: 'Template Registration Failed',
                          summary: "Failed to register templates: ${e.message}",
-                         status: 'FAILURE',
+                         status: 'completed',
+                         conclusion: 'failure',
                          detailsURL: env.BUILD_URL
             throw e
           }
