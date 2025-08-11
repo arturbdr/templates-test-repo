@@ -26,58 +26,53 @@
  */
 
 on_change to: develop, {
-  // Only registers NEW template versions (ignores changes to existing versions)
-  withChecks('Template Registration') {
-    register_templates dev
-  }
+  register_templates dev
 }
 
 on_change to: main, {
-  withChecks('Template Registration') {
-    register_templates staging
-  }
+  register_templates staging
 }
 
 on_change to: production, {
-  withChecks('Template Registration') {
-    register_templates prod
-  }
+  register_templates prod
 }
 
 /**
  * Main entrypoint for the template registration pipeline.
  */
 void register_templates(app_env) {
-  node {
-    stage("Register Templates - ${app_env.short_name}") {
-      script {
-        // Ensure we're in the right directory and git repository is available
-        checkout scm
+  withChecks('Template Registration') {
+    node {
+      stage("Register Templates - ${app_env.short_name}") {
+        script {
+          // Ensure we're in the right directory and git repository is available
+          checkout scm
 
-        echo """=== Template Registration for ${app_env.short_name.toUpperCase()} ==="
-         \n"Document Service URL: ${app_env.document_service_url}"
-         \n"Processing: NEW template versions ONLY (ignores changes to existing versions)"""
+          echo """=== Template Registration for ${app_env.short_name.toUpperCase()} ==="
+           \n"Document Service URL: ${app_env.document_service_url}"
+           \n"Processing: NEW template versions ONLY (ignores changes to existing versions)"""
 
-        // Get git diff to find NEW template files (last commit only)
-        def gitDiffOutput = getNewTemplateFilesFromGit()
-        if (!gitDiffOutput) {
-          printNoTemplatesFoundMessage()
-          echo "No NEW template versions to register. Exiting."
-          return
+          // Get git diff to find NEW template files (last commit only)
+          def gitDiffOutput = getNewTemplateFilesFromGit()
+          if (!gitDiffOutput) {
+            printNoTemplatesFoundMessage()
+            echo "No NEW template versions to register. Exiting."
+            return
+          }
+
+          printNewTemplateFiles(gitDiffOutput)
+          def templatesToRegister = extractTemplatesFromGitDiff(gitDiffOutput)
+          if (templatesToRegister.isEmpty()) {
+            echo "No NEW templates to register after parsing."
+            return
+          }
+
+          printTemplatesToRegister(templatesToRegister)
+          def gitMeta = getGitMetadata()
+          printGitMetadata(gitMeta)
+          registerTemplates(templatesToRegister, gitMeta, app_env)
+          echo "=== Template Registration for ${app_env.short_name.toUpperCase()} Completed ==="
         }
-
-        printNewTemplateFiles(gitDiffOutput)
-        def templatesToRegister = extractTemplatesFromGitDiff(gitDiffOutput)
-        if (templatesToRegister.isEmpty()) {
-          echo "No NEW templates to register after parsing."
-          return
-        }
-
-        printTemplatesToRegister(templatesToRegister)
-        def gitMeta = getGitMetadata()
-        printGitMetadata(gitMeta)
-        registerTemplates(templatesToRegister, gitMeta, app_env)
-        echo "=== Template Registration for ${app_env.short_name.toUpperCase()} Completed ==="
       }
     }
   }
